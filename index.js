@@ -347,11 +347,6 @@ app.put("/api/updatequestions/:id", async (req, res) => {
   }
 });
 
-
-
-
-
-
 app.delete("/api/delquestions/:id", async (req, res) => {
   try {
     const questionId = req.params.id;

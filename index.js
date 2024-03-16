@@ -2,6 +2,7 @@ require("dotenv").config();
 const cors = require("cors");
 const express = require("express");
 const connectDB = require("./ConnectDb");
+const colors = require("colors");
 // const connectDB2 = require("./ConnectDb");
 
 const multer = require("multer");
@@ -47,12 +48,17 @@ const csvFilter = (req, file, cb) => {
 
 const upload = multer({ storage: storage, fileFilter: csvFilter });
 
-// Function to transform CSV data to the desired format
+//Upload sheet function...
 function transformCSVData(row) {
   const question = row.Question;
   const category = row.Category;
   const level = row.Level;
   const correctAnswer = parseInt(row.CorrectAnswer);
+
+  // Validation for question length
+  if (question.length > 200) {
+    throw new Error("Answer length exceeds 25 characters.. || Question length exceeds 200 characters..");
+  }
 
   const options = Object.entries(row)
     .filter(([key, value]) => key.startsWith("Option"))
@@ -61,7 +67,10 @@ function transformCSVData(row) {
       const optionNumber = parseInt(key.replace("Option", ""));
       const isCorrect = optionNumber === correctAnswer;
 
-      console.log(`Option: ${optionValue}, isCorrect: ${isCorrect}`); // Debugging line
+      // Validation for answer length
+      if (optionValue.length > 25) {
+        throw new Error("Answer length exceeds 25 characters.. || Question length exceeds 200 characters..");
+      }
 
       return {
         answer: optionValue,
@@ -80,7 +89,7 @@ function transformCSVData(row) {
 }
 
 // Upload CSV file using Express Rest APIs
-app.post("/api/upload-csv-file", upload.single("file"), (req, res) => {
+app.post("/api/upload-csv-file", upload.single("file"), async (req, res) => {
   try {
     if (req.file == undefined) {
       return res.status(400).send({
@@ -90,58 +99,74 @@ app.post("/api/upload-csv-file", upload.single("file"), (req, res) => {
 
     // Import CSV File to MongoDB database
     let csvData = [];
+    let invalidQuestions = []; // To store invalid questions
     let filePath = __basedir + "/uploads/" + req.file.filename;
     fs.createReadStream(filePath)
       .pipe(csv.parse({ headers: true }))
       .on("error", (error) => {
-        throw error.message;
+        console.log("CSV parsing error:", error.message);
+        res.status(500).send({
+          message: "CSV parsing error: " + error.message,
+        });
       })
       .on("data", (row) => {
         const transformedData = transformCSVData(row);
-        csvData.push(transformedData);
+        if (transformedData) {
+          csvData.push(transformedData);
+        } else {
+          console.log("Invalid data, skipping.");
+          invalidQuestions.push(row.Question);
+        }
       })
-      .on("end", () => {
-        // Establish connection to the database
-        const url = process.env.MONGODB_URI;
-        let dbConn;
-        mongodb.MongoClient.connect(url, {
-          useUnifiedTopology: true,
-        })
-          .then((client) => {
-            dbConn = client.db();
+      .on("end", async () => {
+        console.log("Server is running on Port: 8000");
+        console.log("Connected to MongoDB");
+
+        if (invalidQuestions.length > 0) {
+          console.log("Invalid questions:");
+          invalidQuestions.forEach((question) => {
+            console.log(colors.bgRed.white("Question Not Uploaded :"), question);
+          });
+
+          res.status(400).send({
+            message: "Failed to upload file: Invalid questions found.",
+            invalidQuestions: invalidQuestions,
+          });
+        } else {
+          // Establish connection to the database
+          const url = process.env.MONGODB_URI;
+          try {
+            const client = await mongodb.MongoClient.connect(url, {
+              useUnifiedTopology: true,
+            });
+            const dbConn = client.db();
 
             // Insert into the collection "questions"
             const collectionName = "questions";
             const collection = dbConn.collection(collectionName);
-            collection.insertMany(csvData, (err, result) => {
-              if (err) {
-                console.log(err);
-              }
-              if (result) {
-                res.status(200).send({
-                  message:
-                    "Upload/import the CSV data into the database successfully: " +
-                    req.file.originalname,
-                });
-
-                client.close();
-              }
+            const result = await collection.insertMany(csvData);
+            res.status(200).send({
+              message: "Upload/import the CSV data into the database successfully: " +
+                req.file.originalname,
             });
-          })
-          .catch((err) => {
+            client.close();
+          } catch (error) {
+            console.error("Failed to connect to MongoDB:", error.message);
             res.status(500).send({
-              message: "Fail to import data into the database!",
-              error: err.message,
+              message: "Failed to import data into the database!",
+              error: error.message,
             });
-          });
+          }
+        }
       });
   } catch (error) {
-    console.log("catch error-", error);
+    console.log("Catch error:", error.message);
     res.status(500).send({
       message: "Could not upload the file: " + req.file.originalname,
     });
   }
 });
+
 
 // csv file upload code ends
 
@@ -199,7 +224,6 @@ app.get("/onlyactivecategories", async (req, res) => {
 });
 
 // updating isactive starts
-
 app.put("/updatecategory/:id", async (req, res) => {
   try {
     const { id } = req.params;

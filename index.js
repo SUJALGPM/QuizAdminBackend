@@ -167,7 +167,6 @@ app.post("/api/upload-csv-file", upload.single("file"), async (req, res) => {
   }
 });
 
-
 // csv file upload code ends
 
 // new category starts
